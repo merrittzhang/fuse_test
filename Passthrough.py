@@ -536,9 +536,8 @@ def cluster_images_by_location_and_time_without_known_k(directory):
 
 # TEXT RECOGNITION GROUPING TF-IDF
 
-
+# Extract all text from a PDF file.
 def extract_text_from_pdf_tf(pdf_path):
-    """Extract all text from a PDF file."""
     text = ""
     try:
         reader = PdfReader(pdf_path)
@@ -548,15 +547,15 @@ def extract_text_from_pdf_tf(pdf_path):
         print(f"Failed to extract text from {pdf_path}: {e}")
     return text.strip()
 
+# Preprocess text by lowercasing and removing punctuation.
 def preprocess_text_tf(text):
-    """Preprocess text by lowercasing and removing punctuation."""
     import re
     text = text.lower()
     text = re.sub(r'\W+', ' ', text)
     return text
 
+# Cluster PDF documents based on text content similarity.
 def cluster_pdfs_tf(directory, n_clusters=5):
-    """Cluster PDF documents based on text content similarity."""
     pdf_files = [os.path.join(directory, f) for f in os.listdir(directory) if f.endswith('.pdf')]
     texts = [extract_text_from_pdf_tf(pdf) for pdf in pdf_files]
     texts = [preprocess_text_tf(text) for text in texts]
@@ -578,9 +577,8 @@ def cluster_pdfs_tf(directory, n_clusters=5):
 
 # MISC FILE MANAGEMENT FUNCTIONS
 
-    
+# Move all files from subdirectories into the main directory, leaving them as loose files.
 def flatten_directory_structure(directory):
-    """ Move all files from subdirectories into the main directory, leaving them as loose files. """
     for root, dirs, files in os.walk(directory, topdown=False):
         for name in files:
             file_path = os.path.join(root, name)
@@ -599,8 +597,8 @@ def flatten_directory_structure(directory):
             except OSError as e:
                 print(f"Error removing directory {dir_path}: {e}")
 
+# Print metadata of PNG files found in the specified directory.
 def print_png_metadata(directory):
-    """Print metadata of PNG files found in the specified directory."""
     for root, dirs, files in os.walk(directory):
         for file in files:
             if file.lower().endswith('.png'):
