@@ -18,6 +18,8 @@ from sklearn.metrics import silhouette_score
 from fuse import FUSE, FuseOSError, Operations
 from PIL import Image
 from PIL.ExifTags import TAGS, GPSTAGS
+from PyPDF2 import PdfReader
+from sklearn.feature_extraction.text import TfidfVectorizer
 
 # Initialize the filesystem. The root directory for the filesystem is specified by `root`.
 class Passthrough(Operations):
@@ -394,24 +396,22 @@ def group_mp3_by_metadata(directory, metadata_key):
                     print(f"Could not load ID3 tags for file: {file_path}")
 
 def sanitize_filename(name):
-    """
-    Sanitize strings to create safe directory names.
-    """
+    
     return "".join(c for c in name if c.isalnum() or c in " -_").rstrip()
 
 
 # PHOTO GROUPING METHODS
 
 
+# Extract datetime from EXIF data.
 def get_exif_datetime(tags):
-    """Extract datetime from EXIF data."""
     exif_time = tags.get('EXIF DateTimeOriginal')
     if exif_time:
         return datetime.datetime.strptime(str(exif_time), '%Y:%m:%d %H:%M:%S')
     return None
 
+#  Extract GPS coordinates from EXIF data if available
 def get_gps_coordinates(tags):
-    """ Extract GPS coordinates from EXIF data if available """
     gps_latitude = tags.get('GPS GPSLatitude')
     gps_latitude_ref = tags.get('GPS GPSLatitudeRef')
     gps_longitude = tags.get('GPS GPSLongitude')
@@ -434,8 +434,8 @@ def get_gps_coordinates(tags):
 
     return (latitude, longitude)
 
+# Prepare data for clustering, including paths for re-organization.
 def prepare_image_data(directory):
-    """Prepare data for clustering, including paths for re-organization."""
     locations_times = []
     paths = []
     for root, dirs, files in os.walk(directory):
@@ -452,14 +452,14 @@ def prepare_image_data(directory):
                         paths.append(file_path)
     return locations_times, paths
 
+# Run K-Means clustering on the prepared data.
 def run_kmeans_clustering(data, n_clusters=4, n_init=10):
-    """Run K-Means clustering on the prepared data."""
     kmeans = KMeans(n_clusters=n_clusters, n_init=n_init)
     kmeans.fit(data)
     return kmeans.labels_, kmeans.cluster_centers_
 
+# Use geopy to get country name from latitude and longitude.
 def reverse_geocode(latitude, longitude):
-    """Use geopy to get country name from latitude and longitude."""
     geolocator = Nominatim(user_agent="my_unique_geocoder")
     try:
         location = geolocator.reverse((latitude, longitude), exactly_one=True)
@@ -473,9 +473,8 @@ def reverse_geocode(latitude, longitude):
         print(f"Error in geocoding: {e}")
         return "Unknown"
 
-
+# Cluster JPEG images and organize them into directories based on location and time.
 def cluster_images_by_location_and_time_with_known_k(directory, n_clusters=4):
-    """Cluster JPEG images and organize them into directories based on location and time."""
     data, paths = prepare_image_data(directory)
     if data:
         labels, centers = run_kmeans_clustering(data, n_clusters)
@@ -498,6 +497,7 @@ def cluster_images_by_location_and_time_with_known_k(directory, n_clusters=4):
     else:
         print("No sufficient data to perform clustering.")
 
+# Finds optimal k with silhouette score
 def determine_optimal_k(data, max_k=10):
     scores = []
     for k in range(1, max_k + 1):
@@ -505,10 +505,10 @@ def determine_optimal_k(data, max_k=10):
         if k > 1:
             score = silhouette_score(data, kmeans.labels_)
             scores.append(score)
-    optimal_k = scores.index(max(scores)) + 2  # +2 because range starts from 1 and we're skipping k=1
+    optimal_k = scores.index(max(scores)) + 2
     return optimal_k
 
-
+# Cluster JPEG images and organize them into directories based on location and time.
 def cluster_images_by_location_and_time_without_known_k(directory):
     data, paths = prepare_image_data(directory)
     if len(data) == 0:
@@ -534,6 +534,48 @@ def cluster_images_by_location_and_time_without_known_k(directory):
         print(f"Moved {image_path} to {new_file_path}")
 
 
+# TEXT RECOGNITION GROUPING TF-IDF
+
+
+def extract_text_from_pdf_tf(pdf_path):
+    """Extract all text from a PDF file."""
+    text = ""
+    try:
+        reader = PdfReader(pdf_path)
+        for page in reader.pages:
+            text += page.extract_text() + " "
+    except Exception as e:
+        print(f"Failed to extract text from {pdf_path}: {e}")
+    return text.strip()
+
+def preprocess_text_tf(text):
+    """Preprocess text by lowercasing and removing punctuation."""
+    import re
+    text = text.lower()
+    text = re.sub(r'\W+', ' ', text)
+    return text
+
+def cluster_pdfs_tf(directory, n_clusters=5):
+    """Cluster PDF documents based on text content similarity."""
+    pdf_files = [os.path.join(directory, f) for f in os.listdir(directory) if f.endswith('.pdf')]
+    texts = [extract_text_from_pdf_tf(pdf) for pdf in pdf_files]
+    texts = [preprocess_text_tf(text) for text in texts]
+
+    vectorizer = TfidfVectorizer(stop_words='english')
+    tfidf_matrix = vectorizer.fit_transform(texts)
+
+    kmeans = KMeans(n_clusters=n_clusters, n_init=10)
+    kmeans.fit(tfidf_matrix)
+    labels = kmeans.labels_
+
+    for label, pdf_file in zip(labels, pdf_files):
+        group_dir = os.path.join(directory, f"Cluster_{label}")
+        os.makedirs(group_dir, exist_ok=True)
+        shutil.move(pdf_file, os.path.join(group_dir, os.path.basename(pdf_file)))
+
+    print(f"PDF files have been grouped into {n_clusters} clusters based on their text content.")
+
+
 # MISC FILE MANAGEMENT FUNCTIONS
 
     
@@ -541,16 +583,13 @@ def flatten_directory_structure(directory):
     """ Move all files from subdirectories into the main directory, leaving them as loose files. """
     for root, dirs, files in os.walk(directory, topdown=False):
         for name in files:
-            # Construct the full path to the current file
             file_path = os.path.join(root, name)
-            # Construct the path to move it to the main directory
             new_path = os.path.join(directory, name)
-            # Move the file
-            if file_path != new_path:  # Check if the file is already in the main directory
+
+            if file_path != new_path:
                 os.rename(file_path, new_path)
                 print(f"Moved {file_path} to {new_path}")
 
-    # Optionally, remove the now-empty directories
     for root, dirs, files in os.walk(directory, topdown=False):
         for name in dirs:
             dir_path = os.path.join(root, name)
@@ -567,28 +606,15 @@ def print_png_metadata(directory):
             if file.lower().endswith('.png'):
                 full_path = os.path.join(root, file)
                 with Image.open(full_path) as img:
-                    metadata = img.info  # This dictionary contains all textual information stored in the PNG file
+                    metadata = img.info
                     print(f"Metadata for {file}: {metadata}")
-
-def print_photo_locations(directory):
-    """ Print the location where photo files were taken based on their EXIF data """
-    for root, dirs, files in os.walk(directory):
-        for filename in files:
-            if filename.lower().endswith('.jpg') or filename.lower().endswith('.jpeg'):
-                file_path = os.path.join(root, filename)
-                with open(file_path, 'rb') as f:
-                    tags = exifread.process_file(f)
-                    location = get_gps_coordinates(tags)
-                    if location:
-                        print(f"{filename}: Taken at latitude {location[0]}, longitude {location[1]}")
-                    else:
-                        print(f"{filename}: No GPS data available")
 
 
 def main(mountpoint, root):
 
     # flatten_directory_structure(root)
-    cluster_images_by_location_and_time_without_known_k(root)
+    # cluster_images_by_location_and_time_without_known_k(root)
+    cluster_pdfs_tf(root, n_clusters=3)
     FUSE(Passthrough(root), mountpoint, nothreads=True, foreground=True)
 
 if __name__ == '__main__':
